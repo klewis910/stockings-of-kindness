@@ -1,0 +1,83 @@
+
+name: Sync Stocking Messages
+
+on:
+  repository_dispatch:
+    types: [stockings_updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-messages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate and save messages
+        env:
+          EVENT_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import json
+          from pathlib import Path
+
+          if os.environ["EVENT_NAME"] != "repository_dispatch":
+              print("Manual run: no data received.")
+              raise SystemExit(0)
+
+          payload = json.loads(os.environ["EVENT_PAYLOAD"])
+          messages = payload.get("messages")
+
+          if not isinstance(messages, list):
+              raise ValueError("Payload must contain a messages array.")
+
+          approved = []
+
+          for item in messages:
+              if not isinstance(item, dict):
+                  raise ValueError("Invalid message record.")
+
+              if not isinstance(item.get("recipient"), str):
+                  raise ValueError("Invalid recipient.")
+
+              if not isinstance(item.get("message"), str):
+                  raise ValueError("Invalid message.")
+
+              if not isinstance(item.get("sender"), str):
+                  raise ValueError("Invalid sender.")
+
+              approved.append({
+                  "id": item["id"],
+                  "recipient": item["recipient"],
+                  "message": item["message"],
+                  "sender": item["sender"]
+              })
+
+          Path("stocking-messages.json").write_text(
+              json.dumps(approved, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8"
+          )
+
+          print("Validated messages:", len(approved))
+          PY
+
+      - name: Commit updated messages
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add stocking-messages.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+          else
+            git commit -m "Update stocking messages"
+            git push
+          fi
